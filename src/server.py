@@ -15,7 +15,6 @@ class Server(object):
         self.args = args
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # FedBS disables batch norm tracking
         bn_track = False if args.fedbs else True
         self.global_model = EEGNet(
             sample_rate=args.sample_rate, channels=args.channels, F1=args.F1, 
@@ -27,12 +26,10 @@ class Server(object):
         self.test_dataloader = DataLoader(test_dataset, batch_size=8, shuffle=False)
 
     def model_aggregate(self, client_weight_dict, avg_weight_dict, candidates_id_list):
-        # Applies the weighted average from the clients to the global model
         for id in candidates_id_list:
             for name, data in self.global_model.state_dict().items():
                 update_per_layer = client_weight_dict[id][name] * avg_weight_dict[id]
                 
-                # Prevent PyTorch type-mismatch crashes on integer tensors
                 if data.type() != update_per_layer.type():
                     data.add_(update_per_layer.to(torch.int64))  
                 else:
@@ -45,7 +42,7 @@ class Server(object):
         test_acc, test_loss = 0, 0
         with torch.no_grad():
             for X, y in self.test_dataloader:
-                X, y = X.to(self.device), y.to(self.device)
+                # DATA IS ALREADY ON GPU - NO NEED TO MOVE IT!
                 y_hat = self.global_model(X)
                 
                 test_loss += criterion(y_hat, y).item()
@@ -59,4 +56,4 @@ class Server(object):
         return test_loss, test_acc
 
     def model_save(self, path):
-        torch.save(self.global_model.state_dict(), path)    
+        torch.save(self.global_model.state_dict(), path)

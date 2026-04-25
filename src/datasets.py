@@ -44,7 +44,6 @@ class MIDataset(Dataset):
     def __init__(self, random_state, subject_id: list, root='./data/BNCI2014001', mode='train', test_size=0.2, data_transform=None, label_transform=None):
         self.mode = mode
         
-        # Filter None values from transforms and compose
         data_transform = [t for t in data_transform if t is not None] if data_transform else []
         label_transform = [t for t in label_transform if t is not None] if label_transform else []
         self.data_transform = transforms.Compose(data_transform)
@@ -55,7 +54,6 @@ class MIDataset(Dataset):
             mat_path = os.path.join(root, f"{i}.mat")
             data = scio.loadmat(mat_path)
             
-            # Trimming the data so sample sizes are consistent across subjects
             if 'BNCI2015001' in root:
                 data['X'] = data['X'][:400]
                 data['y'] = data['y'][:400]
@@ -68,21 +66,32 @@ class MIDataset(Dataset):
         self.data = np.array(X)
         self.label = np.array(y).reshape(N * len(subject_id), -1)
         
-        # Apply transforms
         self.data = self.data_transform(self.data)
         self.label = self.label_transform(self.label)
         self.data = self.data.reshape(N * len(subject_id), 1, C, T)
 
-        # Train/Val Split
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(
             self.data, self.label, test_size=test_size, random_state=random_state
         )
 
-        # Shuffle for 'all' mode
         combined = list(zip(self.data, self.label))
         np.random.seed(random_state)
         np.random.shuffle(combined)
         self.data, self.label = zip(*combined)
+
+        # ---------------------------------------------------------
+        # THE GPU FIX: PRE-LOAD ALL DATA DIRECTLY TO VRAM
+        # ---------------------------------------------------------
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        self.X_train = self.X_train.to(device)
+        self.y_train = self.y_train.to(device)
+        self.X_val = self.X_val.to(device)
+        self.y_val = self.y_val.to(device)
+        
+        # Convert the shuffled tuples back into stacked GPU tensors
+        self.data = torch.stack(self.data).to(device)
+        self.label = torch.stack(self.label).to(device)
 
     def __getitem__(self, index):
         if self.mode == 'train':
@@ -99,10 +108,3 @@ class MIDataset(Dataset):
             return len(self.X_val)
         elif self.mode == 'all':
             return len(self.data)
-
-if __name__ == '__main__':
-    # Quick test
-    transform = [ArrayToTensor()]
-    data = MIDataset(random_state=42, subject_id=[1, 2], root='./data/BNCI2014001', mode='all', data_transform=transform, label_transform=transform)
-    print("Dataset loaded successfully.")
-    print(f"Data shape: {data.data[0].shape}, Label shape: {data.label[0].shape}")
