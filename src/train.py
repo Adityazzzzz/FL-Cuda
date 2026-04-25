@@ -7,8 +7,6 @@ import random
 from datetime import datetime
 import os
 import torch
-print(f"Wait, is CUDA actually working? {torch.cuda.is_available()}")
-assert torch.cuda.is_available(), "ABORT: The script is using the CPU!"
 import pandas as pd
 from tqdm import tqdm
 

@@ -41,7 +41,6 @@ class Client(object):
             for X, y in self.train_dataloader:
                 # DATA IS ALREADY ON GPU - NO NEED TO MOVE IT!
 
-                y = y.max(1)[1]
                 if self.args.fedbs:
                     minimizer = SAM(optimizer, self.local_model, self.args.rho)
                     
@@ -77,12 +76,10 @@ class Client(object):
             for X, y in self.eval_dataloader:
                 # DATA IS ALREADY ON GPU - NO NEED TO MOVE IT!
 
-                y = y.max(1)[1]
                 y_hat = self.local_model(X)
                 
                 eval_loss += criterion(y_hat, y).item()
                 pred = y_hat.max(1)[1]
-                y_true = y.max(1)[1]
                 eval_acc += pred.eq(y).sum().item()
 
         eval_loss /= len(self.eval_dataloader.dataset)

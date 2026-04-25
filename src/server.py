@@ -44,12 +44,10 @@ class Server(object):
             for X, y in self.test_dataloader:
                 # DATA IS ALREADY ON GPU - NO NEED TO MOVE IT!
 
-                y = y.max(1)[1]
                 y_hat = self.global_model(X)
                 
                 test_loss += criterion(y_hat, y).item()
                 pred = y_hat.max(1)[1]
-                y_true = y.max(1)[1]
                 test_acc += pred.eq(y).sum().item()
 
         test_loss /= len(self.test_dataloader.dataset)

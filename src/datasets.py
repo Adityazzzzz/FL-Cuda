@@ -8,6 +8,12 @@ import torchvision.transforms as transforms
 from scipy.linalg import fractional_matrix_power
 import os
 
+
+class ArrayToTensor(object):
+    """Converts numpy arrays to PyTorch FloatTensors."""
+    def __call__(self, x):
+        return torch.from_numpy(x).type(torch.FloatTensor)
+
 class EA(object):
     """Euclidean Alignment (EA) transformation for EEG data."""
     def __call__(self, x):
@@ -17,14 +23,13 @@ class EA(object):
             for j in range(x.shape[1]):
                 cov[j] = np.cov(x[i, j])
             refEA = np.mean(cov, axis=0)
-            sqrtRefEA = fractional_matrix_power(refEA, -0.5)
-            new_x[i] = np.matmul(sqrtRefEA, x[i])
+
+            sqrtRefEA = np.real(fractional_matrix_power(refEA, -0.5))
+            
+            new_x[i] = np.nan_to_num(np.matmul(sqrtRefEA, x[i]))
+            
         return new_x
 
-class ArrayToTensor(object):
-    """Converts numpy arrays to PyTorch FloatTensors."""
-    def __call__(self, x):
-        return torch.from_numpy(x).type(torch.FloatTensor)
 
 class ZScoreNorm(object):
     """Z-Score Normalization for EEG data."""
@@ -36,8 +41,13 @@ class ZScoreNorm(object):
                 temp_x = np.concatenate((temp_x, x[i, j]), axis=1) 
             mean_c = np.mean(temp_x, axis=1, keepdims=True) 
             std_c = np.std(temp_x, axis=1, keepdims=True) 
-            new_x[i] = (x[i] - mean_c) / std_c
+            
+            std_c[std_c == 0] = 1e-8 
+            
+            new_x[i] = np.nan_to_num((x[i] - mean_c) / std_c)
+            
         return new_x
+    
 
 class MIDataset(Dataset):
     """Motor Imagery Dataset Loader for .mat files."""
@@ -60,16 +70,35 @@ class MIDataset(Dataset):
             
             N, C, T = data['X'].shape
             X.append(data['X'])
-            df = pd.get_dummies(data['y'])
-            y.append(df.to_numpy()) 
+            
+            # --- THE BULLETPROOF LABEL FIX ---
+            # 1. Force open the nested MATLAB arrays and extract the raw text ('feet') or numbers ('1')
+            clean_labels = [str(item[0]) if isinstance(item, (np.ndarray, list)) else str(item) for item in data['y'].flatten()]
+            
+            # 2. Use pandas to cleanly map whatever it finds into one-hot columns
+            df = pd.get_dummies(clean_labels)
+            
+            # 3. Collapse the columns into a perfect 1D array of 0s and 1s
+            labels = df.to_numpy().argmax(axis=1)
+            y.append(labels)
+            # ---------------------------------
 
         self.data = np.array(X)
-        self.label = np.array(y).reshape(N * len(subject_id), -1)
-        
+        self.label = np.array(y).flatten() 
+
+        # 2. Apply transformations
         self.data = self.data_transform(self.data)
         self.label = self.label_transform(self.label)
-        self.data = self.data.reshape(N * len(subject_id), 1, C, T)
+        
+        # CRITICAL SAFEGUARD: CrossEntropyLoss requires labels to be LongTensors (int64)
+        # If your ArrayToTensor makes them floats, this forces them to integers safely.
+        if isinstance(self.label, torch.Tensor):
+            self.label = self.label.long()
 
+        # 3. Reshape data to (Total_Trials, 1, Channels, Time)
+        self.data = self.data.reshape(-1, 1, C, T)
+
+        # 4. Split into train and validation sets
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(
             self.data, self.label, test_size=test_size, random_state=random_state
         )
