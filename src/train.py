@@ -105,6 +105,10 @@ def train(args, server_subject_id, client_subject_id, Server_TestAcc_List, trace
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Federated Learning for BCIs')
 
+    parser.add_argument('--dp', type=bool, default=False, help='Apply Differential Privacy')
+    parser.add_argument('--clip_bound', type=float, default=1.0, help='Max L2 norm for DP clipping')
+    parser.add_argument('--noise_multiplier', type=float, default=0.1, help='Noise multiplier for DP')
+
     # Model parameters
     parser.add_argument('--model', type=str, default='eegnet')
     parser.add_argument('--sample_rate', type=int, default=250)
