@@ -36,7 +36,7 @@ def query_chatbot(user_message, detected_mood):
     
     # 1. Baseline Request
     baseline_response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         contents=user_message,
         config=types.GenerateContentConfig(
             system_instruction="You are a helpful, direct conversational assistant."
@@ -51,7 +51,7 @@ def query_chatbot(user_message, detected_mood):
     )
     
     adapted_response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         contents=user_message,
         config=types.GenerateContentConfig(
             system_instruction=mood_instruction
@@ -73,7 +73,7 @@ def main():
 
     # Reconstruct EEGNet architecture matching DEAP settings
     eegnet = EEGNet(
-        sample_rate=128,
+        sample_rate=250,
         channels=32,
         F1=8,
         D=2,
