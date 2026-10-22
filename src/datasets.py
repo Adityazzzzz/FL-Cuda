@@ -7,6 +7,7 @@ import scipy.io as scio
 import torchvision.transforms as transforms
 from scipy.linalg import fractional_matrix_power
 import os
+import pickle  # <-- Added for DEAP .dat files
 
 
 class ArrayToTensor(object):
@@ -50,7 +51,7 @@ class ZScoreNorm(object):
     
 
 class MIDataset(Dataset):
-    """Motor Imagery Dataset Loader for .mat files."""
+    """Dataset Loader for Motor Imagery (.mat) and Emotion Decoding (.dat) files."""
     def __init__(self, random_state, subject_id: list, root='./data/BNCI2014001', mode='train', test_size=0.2, data_transform=None, label_transform=None):
         self.mode = mode
         
@@ -60,38 +61,60 @@ class MIDataset(Dataset):
         self.label_transform = transforms.Compose(label_transform)
 
         X, y = [], []
+        
         for i in subject_id:
-            mat_path = os.path.join(root, f"{i}.mat")
-            data = scio.loadmat(mat_path)
             
-            if 'BNCI2015001' in root:
-                data['X'] = data['X'][:400]
-                data['y'] = data['y'][:400]
-            
-            N, C, T = data['X'].shape
-            X.append(data['X'])
-            
-            # --- THE BULLETPROOF LABEL FIX ---
-            # 1. Force open the nested MATLAB arrays and extract the raw text ('feet') or numbers ('1')
-            clean_labels = [str(item[0]) if isinstance(item, (np.ndarray, list)) else str(item) for item in data['y'].flatten()]
-            
-            # 2. Use pandas to cleanly map whatever it finds into one-hot columns
-            df = pd.get_dummies(clean_labels)
-            
-            # 3. Collapse the columns into a perfect 1D array of 0s and 1s
-            labels = df.to_numpy().argmax(axis=1)
-            y.append(labels)
-            # ---------------------------------
+            # ==========================================
+            # DEAP DATASET ROUTING
+            # ==========================================
+            if 'DEAP' in root.upper():
+                # Load DEAP pickle file (s1.dat, s2.dat, etc.)
+                dat_path = os.path.join(root, f"s{i}.dat")
+                with open(dat_path, 'rb') as f:
+                    data = pickle.load(f, encoding='latin1')
+                
+                # 1. Extract EEG Data: shape is (40 trials, 40 channels, 8064 time steps)
+                # We slice [:32] to drop the 8 peripheral channels and keep only the brainwaves.
+                eeg_data = data['data'][:, :32, :]
+                
+                # 2. Extract Emotion Labels: shape is (40 trials, 4 labels)
+                # Index 0 is Valence (Happiness). Index 1 is Arousal (Excitement).
+                # We threshold the 1-9 rating at 5.0 to create a binary 0/1 classification.
+                valence_ratings = data['labels'][:, 0]
+                binary_labels = (valence_ratings > 5.0).astype(int)
+                
+                N, C, T = eeg_data.shape
+                X.append(eeg_data)
+                y.append(binary_labels)
+                
+            # ==========================================
+            # BNCI MOTOR IMAGERY ROUTING
+            # ==========================================
+            else:
+                mat_path = os.path.join(root, f"{i}.mat")
+                data = scio.loadmat(mat_path)
+                
+                if 'BNCI2015001' in root:
+                    data['X'] = data['X'][:400]
+                    data['y'] = data['y'][:400]
+                
+                N, C, T = data['X'].shape
+                X.append(data['X'])
+                
+                clean_labels = [str(item[0]) if isinstance(item, (np.ndarray, list)) else str(item) for item in data['y'].flatten()]
+                df = pd.get_dummies(clean_labels)
+                labels = df.to_numpy().argmax(axis=1)
+                y.append(labels)
 
+        # 1. Convert lists to numpy arrays and flatten the labels
         self.data = np.array(X)
         self.label = np.array(y).flatten() 
 
-        # 2. Apply transformations
+        # 2. Apply transformations (like Euclidean Alignment)
         self.data = self.data_transform(self.data)
         self.label = self.label_transform(self.label)
         
-        # CRITICAL SAFEGUARD: CrossEntropyLoss requires labels to be LongTensors (int64)
-        # If your ArrayToTensor makes them floats, this forces them to integers safely.
+        # CRITICAL SAFEGUARD: CrossEntropyLoss requires labels to be LongTensors
         if isinstance(self.label, torch.Tensor):
             self.label = self.label.long()
 
@@ -109,7 +132,7 @@ class MIDataset(Dataset):
         self.data, self.label = zip(*combined)
 
         # ---------------------------------------------------------
-        # THE GPU FIX: PRE-LOAD ALL DATA DIRECTLY TO VRAM
+        # GPU VRAM PRE-LOADER
         # ---------------------------------------------------------
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
@@ -118,7 +141,6 @@ class MIDataset(Dataset):
         self.X_val = self.X_val.to(device)
         self.y_val = self.y_val.to(device)
         
-        # Convert the shuffled tuples back into stacked GPU tensors
         self.data = torch.stack(self.data).to(device)
         self.label = torch.stack(self.label).to(device)
 

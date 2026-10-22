@@ -14,6 +14,7 @@ from server import Server
 from client import Client
 from datasets import MIDataset, EA, ArrayToTensor
 from utils import EarlyStopping
+from attack import HonestButCuriousServer
 
 
 def strtobool(val):
@@ -47,6 +48,8 @@ def train(args, server_subject_id, client_subject_id, Server_TestAcc_List, trace
             id=i
         ))
 
+    adversary = HonestButCuriousServer()
+
     trace_func('Begin Training')
     
     # 3. Global Training Loop
@@ -67,6 +70,9 @@ def train(args, server_subject_id, client_subject_id, Server_TestAcc_List, trace
         for j in candidates:
             # Local Training
             weight_diff = j.local_train(server.global_model)
+
+            # --- SNOOP ON THE UPDATE ---
+            adversary.snoop_update(weight_diff, client_id=j.client_id)
                 
             # Local Evaluation
             loss, acc = j.local_eval(server.global_model)
@@ -101,9 +107,17 @@ def train(args, server_subject_id, client_subject_id, Server_TestAcc_List, trace
     Server_TestAcc_List.append(round(100*test_acc, 2))
     trace_func(f'Server Test Acc: {100*test_acc:.2f}%')
 
+    # --- EXECUTE THE PRIVACY AUDIT ---
+    attack_success = adversary.perform_reidentification_attack()
+    trace_func(f'🚨 ATTACK SUCCESS RATE: {attack_success:.2f}%')
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Federated Learning for BCIs')
+
+    parser.add_argument('--dp', type=bool, default=False, help='Apply Differential Privacy')
+    parser.add_argument('--clip_bound', type=float, default=1.0, help='Max L2 norm for DP clipping')
+    parser.add_argument('--noise_multiplier', type=float, default=0.1, help='Noise multiplier for DP')
 
     # Model parameters
     parser.add_argument('--model', type=str, default='eegnet')

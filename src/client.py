@@ -59,8 +59,43 @@ class Client(object):
                 self.local_model.MaxNormConstraint()
 
         weight_diff = {}
+        
+        # --- DIFFERENTIAL PRIVACY ENGINE ---
+        # These parameters will eventually be passed from train.py via self.args
+        apply_dp = getattr(self.args, 'dp', False)
+        clip_bound = getattr(self.args, 'clip_bound', 1.0)
+        noise_multiplier = getattr(self.args, 'noise_multiplier', 0.1)
+
+        # 1. Calculate raw weight differences
         for name, data in self.local_model.state_dict().items():
             weight_diff[name] = (data - global_model.state_dict()[name])
+
+        if apply_dp:
+            # 2. Calculate the global L2 norm of the entire weight update
+            total_norm = 0.0
+            for name, diff in weight_diff.items():
+                if diff.dtype in [torch.float32, torch.float64]:
+                    total_norm += diff.norm(2).item() ** 2
+            total_norm = total_norm ** 0.5
+
+            # 3. Calculate scaling factor for clipping
+            clip_factor = clip_bound / max(1e-6, total_norm)
+            clip_factor = min(1.0, clip_factor) # Only scale down, never up
+
+            # 4. Apply clipping and inject Gaussian noise
+            for name, diff in weight_diff.items():
+                if diff.dtype in [torch.float32, torch.float64]:
+                    # Clip
+                    clipped_diff = diff * clip_factor
+                    # Add Noise: std_dev = clip_bound * noise_multiplier
+                    noise = torch.normal(
+                        mean=0.0, 
+                        std=clip_bound * noise_multiplier, 
+                        size=clipped_diff.size(), 
+                        device=clipped_diff.device
+                    )
+                    weight_diff[name] = clipped_diff + noise
+        # -----------------------------------
 
         return weight_diff
 
