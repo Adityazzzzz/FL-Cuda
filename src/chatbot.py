@@ -30,9 +30,10 @@ def decode_emotion(model, sample_tensor, device):
         pred_idx = output.argmax(dim=1).item()
     return "Positive / High Valence" if pred_idx == 1 else "Negative / Low Valence"
 
-def query_chatbot(user_message, detected_mood):
+def query_chatbot(user_message, detected_mood, api_key=None):
     """Generates baseline vs. EEG-conditioned responses using Gemini."""
-    client = genai.Client()
+    key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    client = genai.Client(api_key=key) if key else genai.Client()
     
     # 1. Baseline Request
     baseline_response = client.models.generate_content(
@@ -67,6 +68,7 @@ def main():
     parser.add_argument("--subject_id", type=int, default=1, help="Subject ID (1-32)")
     parser.add_argument("--trial_idx", type=int, default=0, help="Trial index (0-39)")
     parser.add_argument("--prompt", type=str, default="I have a mountain of work to do and I don't even know where to start.", help="User query text")
+    parser.add_argument("--api_key", type=str, default=None, help="Gemini API Key (optional, can also use GEMINI_API_KEY env var)")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -96,7 +98,7 @@ def main():
     print("=" * 65)
     print(f"\nUser Input: \"{args.prompt}\"\n")
 
-    baseline, adapted = query_chatbot(args.prompt, detected_mood)
+    baseline, adapted = query_chatbot(args.prompt, detected_mood, api_key=args.api_key)
 
     print("-" * 25 + " BASELINE RESPONSE " + "-" * 25)
     print(baseline.strip())

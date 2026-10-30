@@ -10,3 +10,4 @@ tqdm
 tensorboard
 mne
 moabb
+google-genai

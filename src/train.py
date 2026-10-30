@@ -7,6 +7,7 @@ import random
 from datetime import datetime
 import os
 import torch
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
@@ -20,7 +21,7 @@ from attack import HonestButCuriousServer
 def strtobool(val):
     return str(val).lower() in ("yes", "true", "t", "1")
 
-def train(args, server_subject_id, client_subject_id, Server_TestAcc_List, trace_func=print, save_path='./checkpoint.pth'):
+def train(args, server_subject_id, client_subject_id, Server_TestAcc_List, trace_func=print, save_path='./checkpoint.pth', Attack_Success_List=None):
     seed = random.randint(1, 100) 
     data_transform = [
         EA() if args.ea else None,
@@ -110,12 +111,14 @@ def train(args, server_subject_id, client_subject_id, Server_TestAcc_List, trace
     # --- EXECUTE THE PRIVACY AUDIT ---
     attack_success = adversary.perform_reidentification_attack()
     trace_func(f'🚨 ATTACK SUCCESS RATE: {attack_success:.2f}%')
+    if Attack_Success_List is not None:
+        Attack_Success_List.append(round(attack_success, 2))
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Federated Learning for BCIs')
 
-    parser.add_argument('--dp', type=bool, default=False, help='Apply Differential Privacy')
+    parser.add_argument('--dp', type=lambda x: bool(strtobool(x)), default=False, help='Apply Differential Privacy')
     parser.add_argument('--clip_bound', type=float, default=1.0, help='Max L2 norm for DP clipping')
     parser.add_argument('--noise_multiplier', type=float, default=0.1, help='Noise multiplier for DP')
 
@@ -159,6 +162,7 @@ if __name__ == '__main__':
     print('='*90)
         
     Server_TestAcc_List = []
+    Attack_Success_List = []
     subject_id = [int(i) for i in args.sub_id.split(',')]
 
     # Leave-One-Subject-Out (LOSO) Loop
@@ -170,17 +174,63 @@ if __name__ == '__main__':
         print(f'Server Subject {server_subject_id} Begin')
         print(f'Client subject ID: {client_subject_id}')
         
-        train(args, server_subject_id, client_subject_id, Server_TestAcc_List, trace_func=tqdm.write, save_path=f'{save_path}/Model_ServerSub{id}.pth')
+        train(args, server_subject_id, client_subject_id, Server_TestAcc_List, trace_func=tqdm.write, save_path=f'{save_path}/Model_ServerSub{id}.pth', Attack_Success_List=Attack_Success_List)
         
         print(f'Server Subject {server_subject_id} Complete')
         print('-'*64)
 
-    # Final Results Logging
-    mean = round(sum(Server_TestAcc_List)/len(Server_TestAcc_List), 2)
-    Server_TestAcc_List.append(mean)
+    # Final Results Logging & Metric Computation
+    accs = np.array(Server_TestAcc_List, dtype=float)
+    mean_acc = round(float(np.mean(accs)), 2)
+    median_acc = round(float(np.median(accs)), 2)
 
-    print('='*62 + '\n')
-    columns = [int(i) for i in args.sub_id.split(',')] + ['Avg']
-    df = pd.DataFrame([Server_TestAcc_List], columns=columns, index=['Test Acc'])
-    print('Test Result: ')
-    print(df)
+    error_ratios = np.round(100.0 - accs, 2)
+    mean_err = round(float(np.mean(error_ratios)), 2)
+    median_err = round(float(np.median(error_ratios)), 2)
+
+    columns = [int(i) for i in args.sub_id.split(',')] + ['Mean', 'Median']
+
+    acc_row = list(accs) + [mean_acc, median_acc]
+    err_row = list(error_ratios) + [mean_err, median_err]
+    err_ratio_dec_row = [round(e / 100.0, 4) for e in err_row]
+
+    rows = [acc_row, err_row, err_ratio_dec_row]
+    index = ['Test Acc (%)', 'Error Ratio (%)', 'Error Ratio (0-1)']
+
+    if Attack_Success_List:
+        att_arr = np.array(Attack_Success_List, dtype=float)
+        mean_att = round(float(np.mean(att_arr)), 2)
+        median_att = round(float(np.median(att_arr)), 2)
+        att_row = list(att_arr) + [mean_att, median_att]
+        rows.append(att_row)
+        index.append('Attack Success (%)')
+
+    df = pd.DataFrame(rows, columns=columns, index=index)
+    pd.set_option("display.float_format", lambda x: f"{x:.2f}" if abs(x) >= 1 else f"{x:.4f}")
+
+    dp_status = f"ON  (noise={args.noise_multiplier}, clip={args.clip_bound})" if args.dp else "OFF"
+    fedbs_status = f"ON  (rho={args.rho})" if args.fedbs else "OFF"
+
+    print('\n' + '='*80)
+    print('                           FINAL EVALUATION RESULTS')
+    print('='*80)
+    print(f'  Run config:  global_epochs={args.global_epochs}  local_epochs={args.local_epochs}')
+    print(f'               FedBS={fedbs_status}')
+    print(f'               Differential Privacy={dp_status}')
+    print(f'  Subjects:    {subject_id}')
+    print('-'*80)
+    print('\n[Per-Subject Matrix]')
+    print(df.to_string())
+    print('\n' + '-'*80)
+    print('Aggregate Metrics:')
+    print(f'  Mean Accuracy:        {mean_acc:.2f}%')
+    print(f'  Median Accuracy:      {median_acc:.2f}%')
+    print(f'  Mean Error Ratio:     {mean_err:.2f}%  ({mean_err/100:.4f})')
+    print(f'  Median Error Ratio:   {median_err:.2f}%  ({median_err/100:.4f})')
+    if Attack_Success_List:
+        print(f'  Mean Attack Success:  {mean_att:.2f}%')
+        print(f'  Median Attack Success:{median_att:.2f}%')
+    print('='*80 + '\n')
+
+    # Save full matrix to CSV
+    df.to_csv(f"{save_path}/evaluation_results.csv")
